@@ -1,0 +1,32 @@
+FROM ubuntu:18.04
+
+RUN apt-get update && apt-get install -y tesseract-ocr python3.6 python3-pip libsm6 libxext6 libzbar-dev poppler-utils libdmtx0a ghostscript && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN chmod -R 777 /tmp/
+
+COPY tesseract_files/hun_fast.traineddata /usr/share/tesseract-ocr/4.00/tessdata/
+COPY tesseract_files/hun_fast.user-words /usr/share/tesseract-ocr/4.00/tessdata/
+COPY tesseract_files/bazaar_complete /usr/share/tesseract-ocr/4.00/tessdata/configs/
+
+COPY tesseract_files/hun_precise.traineddata /usr/share/tesseract-ocr/4.00/tessdata/
+COPY tesseract_files/hun_precise.user-words-name /usr/share/tesseract-ocr/4.00/tessdata/
+COPY tesseract_files/hun_precise.user-words-city /usr/share/tesseract-ocr/4.00/tessdata/
+COPY tesseract_files/bazaar_name /usr/share/tesseract-ocr/4.00/tessdata/configs/
+COPY tesseract_files/bazaar_city /usr/share/tesseract-ocr/4.00/tessdata/configs/
+
+RUN mkdir -p /usr/src/app
+WORKDIR /usr/src/app
+
+RUN mkdir saved
+
+COPY requirements.txt /usr/src/app/
+
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+COPY . /usr/src/app
+
+EXPOSE 8080
+
+ENTRYPOINT ["python3.6"]
+
+CMD ["-m", "swagger_server"]

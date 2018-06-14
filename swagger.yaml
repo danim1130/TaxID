@@ -1,0 +1,234 @@
+swagger: "2.0"
+info:
+  description: "Extract information from tax Id cards."
+  version: "0.2.0"
+  title: "Tax Identification Card Reader"
+host: "taxid-reader.eu-de.mybluemix.net"
+basePath: "/api"
+schemes:
+- "http"
+produces:
+- "application/json"
+paths:
+  /checkId:
+    post:
+      summary: "Checks submitted information"
+      description: "The endpoint checks the submitted information against the submitted image."
+      consumes: 
+      - "multipart/form-data"
+      parameters: 
+      - name: "image"
+        in: "formData"
+        required: true
+        type: "file"
+      - name: "name"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "birthdate"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "mothername"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "releasedate"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "id_num"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "birthplace"
+        in: "formData"
+        required: false
+        type: "string"
+      - name: "runlevel"
+        in: "formData"
+        type: "integer"
+        required: false
+        default: 0
+        description: "Lower value means faster runtime, but lower precision."
+      - name: "apiKey"
+        in: "formData"
+        type: "string"
+        required: true
+      responses:
+        200:
+          description: "The predicted matching with confidence level"
+          schema:
+            $ref: "#/definitions/CheckResponse"
+        default:
+          description: "Unexpected error"
+          schema:
+            $ref: "#/definitions/Error"
+  /readId:
+    post:
+      summary: "Extract information from the submitted card"
+      description: "The endpoint returns information about the submitted taxId card. Supports multiple image format."
+      consumes:
+      - "multipart/form-data"
+      parameters:
+      - name: "image"
+        in: "formData"
+        required: true
+        type: "file"
+      - name: "apiKey"
+        in: "formData"
+        type: "string"
+        required: true
+      - name: "runlevel"
+        in: "formData"
+        type: "integer"
+        required: false
+        default: 0
+        description: "Lower value means faster runtime, but lower precision."
+      responses:
+        200:
+          description: "The extracted values under different settings"
+          schema:
+              type: array
+              items:
+                $ref: "#/definitions/TaxIdCard"
+        default:
+          description: "Unexpected error"
+          schema:
+            $ref: "#/definitions/Error"
+  /testCpu:
+    get:
+      summary: "Get information about the cpu"
+      description: "Returns information about the cpu the program is running on, like model, speed, and flags"
+      responses:
+        200:
+          description: "Extracted information"
+          schema:
+            type: string
+        default:
+          description: "Unexpected error"
+          schema:
+            $ref: "#/definitions/Error"
+definitions:
+  ConfidenceValue:
+    type: "object"
+    properties:
+      value:
+        type: "string"
+      confidence:
+        type: "number"
+        description: "Number between 0-100. Higher number means higher confidence."
+    example:
+      confidence: 88
+      value: "Budapest"
+  TaxIdCard:
+    type: "object"
+    required: ["id_num", "birthdate", "birthplace", "name", "mother_name", "release_date", "valid", "type"]
+    properties:
+      id_num:
+        type: "string"
+        description: "The identification number of the card"
+      serial_num:
+        type: "string"
+        description: "The serial number of the card"
+      birthdate:
+        $ref: "#/definitions/ConfidenceValue"
+      birthplace:
+        $ref: "#/definitions/ConfidenceValue"
+      name:
+        $ref: "#/definitions/ConfidenceValue"
+      mother_name:
+        $ref: "#/definitions/ConfidenceValue"
+      release_date:
+        $ref: "#/definitions/ConfidenceValue"
+      type:
+        type: "string"
+        description: "The type of the id card (either NEW_CARD, OLD_CARD, or UNKNOWN)"
+      valid:
+        type: "boolean"
+        description: "Is the identified card number valid."
+    example:
+      valid: true
+      birthdate:
+        confidence: 77
+        value: "2001.05.04"
+      birthplace:
+        confidence: 86
+        value: "Budapest"
+      release_date:
+        confidence: 67
+        value: "2006.04.23"
+      mother_name:
+        confidence: 78
+        value: "Teszt Erika"
+      id_num: "8123456790"
+      name:
+        confidence: 88
+        value: "Teszt Elek"
+      type: "NEW_CARD"
+      serial_num: "AB123456"
+  CheckResponseField:
+    type: "object"
+    properties:
+      possible_values:
+        type: array
+        items:
+          $ref: '#/definitions/ConfidenceValue'
+      validation_result:
+        $ref: '#/definitions/ConfidenceValue'
+  CheckResponse:
+    type: "object"
+    properties:
+      validation_result:
+        type: string
+        enum: [accept, validate, reject]
+      id_num:
+        $ref: "#/definitions/CheckResponseField"
+      birthdate:
+        $ref: "#/definitions/CheckResponseField"
+      birthplace:
+        $ref: "#/definitions/CheckResponseField"
+      name:
+        $ref: "#/definitions/CheckResponseField"
+      mother_name:
+        $ref: "#/definitions/CheckResponseField"
+      release_date:
+        $ref: "#/definitions/CheckResponseField"
+    example:
+      birthdate:
+        validation_result:
+          value: "validate"
+        possible_values:
+        - value: "2000.04.08"
+          confidence: 88
+        - value: "2000.04.09"
+          confidence: 65
+      birthplace:
+        validation_result:
+          confidence: 100
+          value: True
+      release_date:
+        validation_result:
+          confidence: 67
+          value: false
+        possible_values:
+        - value: "1995.04.09"
+          confidence: 67
+      mother_name:
+        validation_result:
+          confidence: 100
+          value: true
+      name:
+        validation_result:
+          confidence: 100
+          value: true
+      id_num:
+        validation_result:
+          confidence: 100
+          value: true
+  Error:
+    type: "object"
+    properties:
+      message:
+        type: "string"
+

@@ -1,0 +1,8 @@
+load_system_dawg     0
+load_freq_dawg       0
+user_words_suffix    hun.user-words-name
+user_patterns_suffix user-patterns
+tessedit_enable_dict_correction 1
+language_model_penalty_non_freq_dict_word 1
+language_model_penalty_non_dict_word 1
+tessedit_pageseg_mode 7
