@@ -128,7 +128,7 @@ def check_id_post(image, apiKey, name=None, birthdate=None, mothername=None, rel
 
     validate_fields = {}
     if name is not None:
-        validate_fields['name'] = name
+        validate_fields['name'] = name.strip()
     if birthdate is not None:
         validate_fields['birthdate'] = birthdate
     if mothername is not None:
@@ -141,17 +141,17 @@ def check_id_post(image, apiKey, name=None, birthdate=None, mothername=None, rel
         validate_fields['birthplace'] = birthplace
 
     card = id_card.validate_id_card(img, runlevel, validate_fields)
-
-    if card['validation_failed']:
-        result = 'reject'
-    elif card['validation_success']:
-        result = 'accept'
-    else:
-        result = 'validate'
-
     if type(card) is str:
         return Error(card)
     else:
+
+        if card['validation_failed']:
+            result = 'reject'
+        elif card['validation_success']:
+            result = 'accept'
+        else:
+            result = 'validate'
+
         return CheckResponse(
             id_num=None if id_num is None else card['id_number'],
             birthdate=None if birthdate is None else card['birthdate'],

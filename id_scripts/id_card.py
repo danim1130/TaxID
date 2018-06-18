@@ -18,7 +18,7 @@ from swagger_server.models.check_response_field import CheckResponseField
 Response = namedtuple('ID_Card', 'id_num name birthday birthplace mother_name_primary mother_name_secondary release_date type serial_number valid')
 
 
-name_regex = re.compile('[^a-zA-ZáÁéÉíÍóÓöÖőŐüÜúÚ\- ]')
+name_regex = re.compile('[^a-zA-ZáÁéÉíÍóÓöÖőŐüÜúÚ.\- ]')
 birthplace_regex = re.compile('[^a-zA-Z0-9áÁéÉíÍóÓöÖőŐüÜúÚ\- ]')
 date_regex = re.compile('[^0-9]')
 
@@ -120,18 +120,22 @@ def __image_name(read_values):
 
     name_parts = name.split(' ')
     for part in name_parts.copy()[::-1]:
-        if len(part) == 0 or part[0] == '-':
+        if len(part) == 0 or part[0] == '-' or part[0] == '.':
             confidence_levels.pop(name_parts.index(part))
             name_parts.remove(part)
 
     name_parts_temp = name_parts.copy()
+    extra_fields = 0
     for part in name_parts[::-1]:
+        if part == 'DR.' or part == "IFJ." or part == "ÖZV.":
+            extra_fields += 1
+            continue
         if part not in names:
             name_parts_temp.remove(part)
         else:
             break
 
-    if len(name_parts_temp) > 1:
+    if len(name_parts_temp) > extra_fields + 1:
         return ConfidenceValue(value=' '.join(name_parts_temp).title(), confidence=min(confidence_levels[0:len(name_parts_temp) - 1])), True
     elif len(name_parts) == 0:
         return ConfidenceValue(value="", confidence=0), False
@@ -277,7 +281,7 @@ field_coordinates = [
         [[385, 280], [710, 325]], #birthplace
         [[210, 320], [745, 370]], #mother_name_primary
         [[65, 355], [455, 400]], #mother_name_secondary
-        [[570, 385], [780, 440]], #release data
+        [[565, 385], [770, 435]], #release data
     ],
     [ #NEW_CARD
         [[335, 583], [616, 675]], #barcode
@@ -352,7 +356,7 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
 
         img2 = cv2.warpPerspective(input_img, M, (card_sizes[card_type][0] + int(2 * offset), card_sizes[card_type][1] + int(2 * offset)))
 
-        img2 = cv2.fastNlMeansDenoisingColored(img2, None, 10, 10, 7, 21)
+        img2 = cv2.fastNlMeansDenoisingColored(img2, None, 10, 10, 5, 21)
 
         kp2, des2 = sift.detectAndCompute(img2, None)
 
@@ -907,11 +911,17 @@ def validate_id_card(img, runlevel, validating_fields):
         if key not in unchecked_fields:
             response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
         elif found_fields[key] is not None:
-            maxValue = 0
+            maxValue = -1
+            maxField = ""
             for conf in found_fields[key]:
-                if int(conf.confidence) > maxValue:
+                if int(conf.confidence) > maxValue and conf.value is not None and type(conf.value) is str and len(conf.value) != 0:
                     maxValue = int(conf.confidence)
-            response[key] = CheckResponseField(possible_values=found_fields[key], validation_result=ConfidenceValue(False, maxValue))
+                    maxField = conf
+
+            if maxValue == -1:
+                response[key] = CheckResponseField(validation_result=ConfidenceValue(False, maxValue))
+            else:
+                response[key] = CheckResponseField(possible_values=[maxField], validation_result=ConfidenceValue(False, maxValue))
         else:
             response[key] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=0))
 
