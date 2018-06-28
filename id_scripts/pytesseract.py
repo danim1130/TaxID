@@ -187,10 +187,9 @@ def run_multiple_and_get_output(images,
                 return output_file.read()
             return output_file.read().decode('utf-8').strip()
     finally:
-        cleanup(temp_name)
-
-
-    cleanup(temp_list_name)
+        for image_name in image_names:
+            cleanup(image_name)
+        cleanup(temp_list_name)
 
 
 def file_to_dict(tsv, cell_delimiter, str_col_idx):

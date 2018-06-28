@@ -36,7 +36,6 @@ def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = 
             images[i] = image
 
     read_str = pytesseract.run_multiple_and_get_output(images, extension='tsv', extension_configs=extension_configs, config="--psm 7", lang=lang)
-    print("Tesseract time: " + str(time.time() - start_time))
     #for image in images:
     #    cv2.imshow("TEST", image)
     #    cv2.waitKey(0)
@@ -479,8 +478,6 @@ def validate_id_card(img, runlevel, validating_fields):
         if type(img) is str:
             return __get_barcode_response(original_img)
 
-    print("Warp time: " + str((time.time() - start_time)))
-
     # Barcode detection
     start_time = time.time()
     barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
@@ -500,7 +497,6 @@ def validate_id_card(img, runlevel, validating_fields):
             return __get_barcode_response(original_img)
 
     real_id_num = barcode_id_num
-    print("Barcode time: " + str((time.time() - start_time)))
 
     real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'),
                                     confidence=random.randint(90, 100))
@@ -964,7 +960,6 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
             return __get_barcode_response(original_img)
 
     real_id_num = barcode_id_num
-    print("Barcode time: " + str((time.time() - start_time)))
 
     real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'), confidence=random.randint(90,100))
 
@@ -1116,8 +1111,6 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
             if "serial_number" not in filter_fields:
                 serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
 
-
-    print("Read time: " + str((time.time() - start_time)))
 
     if mother_name_2 is None:
         mother_name_primary = mother_name_1

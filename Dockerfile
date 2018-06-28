@@ -27,6 +27,5 @@ COPY . /usr/src/app
 
 EXPOSE 8080
 
-ENTRYPOINT ["python3.6"]
+CMD python3.6 cleanup.py & python3.6 -m swagger_server
 
-CMD ["-m", "swagger_server"]

@@ -18,7 +18,7 @@ content = frozenset([x.strip() for x in content])
 
 
 def __gs_pdf_to_png(pdf):
-    temp_name = tempfile.mktemp(prefix='pdfjpeg_')
+    temp_name = tempfile.mktemp(prefix='tess_pdfjpeg_')
     pdf_file = temp_name + ".pdf"
     try:
         with open(pdf_file, "wb") as file:
