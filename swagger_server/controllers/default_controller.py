@@ -143,6 +143,8 @@ def check_id_post(image, apiKey, name=None, birthdate=None, mothername=None, rel
     card = id_card.validate_id_card(img, runlevel, validate_fields)
     if type(card) is str:
         return Error(card)
+    elif type(card) is not dict:
+        return Error("Couldn't find card on image.")
     else:
 
         if card['validation_failed']:
@@ -183,8 +185,12 @@ def read_id_post(image, apiKey, runlevel=None):  # noqa: E501
     if type(img) is Error:
         return img
 
-    card = id_card.read_id_card(img, runlevel, run_otsu=False)
-    card2 = id_card.read_id_card(img, runlevel, run_otsu=True)
+    card = id_card.read_id_card(img, runlevel, run_otsu=False, use_blur=False)
+    card2 = id_card.read_id_card(img, runlevel, run_otsu=True, use_blur=False)
+    card3 = id_card.read_id_card(img, runlevel, run_otsu=True, use_blur=True)
+    card4 = id_card.read_id_card(img, runlevel, run_otsu=False, use_blur=True)
+
+    cards = [card, card2, card3, card4]
 
     if type(card) is str:
         ret = Error(card)
@@ -199,17 +205,7 @@ def read_id_post(image, apiKey, runlevel=None):  # noqa: E501
                         release_date=ConfidenceValue(card.release_date.value, card.release_date.confidence),
                         valid=card.valid,
                         type=card.type,
-                        serial_num=card.serial_number),
-               TaxIdCard(id_num=card2.id_num,
-                         birthdate=ConfidenceValue(card2.birthday.value, card2.birthday.confidence),
-                         birthplace=ConfidenceValue(card2.birthplace.value, card2.birthplace.confidence),
-                         name=ConfidenceValue(card2.name.value, card2.name.confidence),
-                         mother_name=ConfidenceValue(card2.mother_name_primary.value,
-                                                     card2.mother_name_primary.confidence),
-                         release_date=ConfidenceValue(card2.release_date.value, card2.release_date.confidence),
-                         valid=card2.valid,
-                         type=card2.type,
-                         serial_num=card2.serial_number)]
+                        serial_num=card.serial_number) for card in cards]
 
     return ret
 

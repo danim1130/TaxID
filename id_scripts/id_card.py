@@ -23,23 +23,28 @@ birthplace_regex = re.compile('[^a-zA-Z0-9áÁéÉíÍóÓöÖőŐüÜúÚ\- ]')
 date_regex = re.compile('[^0-9]')
 
 
-def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = False):
+def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = False, blur_image = False):
     start_time = time.time()
-    if run_otsu:
-        for i in range(0, len(images)):
-            image = images[i]
+    for i in range(0, len(images)):
+        image = images[i]
+        if run_otsu:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            #image = cv2.GaussianBlur(image,(3,3),0.5)
+            if blur_image:
+                image = cv2.GaussianBlur(image,(5,5),0.7)
             _, image = cv2.threshold(image, 0, 255, cv2.THRESH_OTSU)
             #image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, (5, 5), iterations=1, borderValue=255)
             #image = cv2.morphologyEx(image, cv2.MORPH_OPEN, (5, 5), iterations=1, borderValue=255)
-            images[i] = image
+            image = cv2.copyMakeBorder(image, 25, 25, 15, 15, cv2.BORDER_CONSTANT, value=255)
+        elif blur_image:
+            image = cv2.GaussianBlur(image, (5,5), 0.7)
+        images[i] = image
 
     read_str = pytesseract.run_multiple_and_get_output(images, extension='tsv', extension_configs=extension_configs, config="--psm 7", lang=lang)
-    #for image in images:
-    #    cv2.imshow("TEST", image)
-    #    cv2.waitKey(0)
-    ##    cv2.imwrite("test%d.png" % random.randint(0, 100), image, (cv2.IMWRITE_PNG_COMPRESSION, 0))
+    #print("Tesseract time: " + str(time.time() - start_time))
+    #for idx, image in enumerate(images):
+        #cv2.imshow("TEST", image)
+        #cv2.waitKey(0)
+        #cv2.imwrite("test%d.png" % idx, image, (cv2.IMWRITE_PNG_COMPRESSION, 0))
 
     read_values = []
     lines = read_str.split("\n")
@@ -167,10 +172,14 @@ def __image_city(read_values):
             city_parts.remove(part)
 
     best_candidate = ''
+    numbers_found = ''
+
     for part in city_parts:
         if part in cities:
             best_candidate = part
             break
+        elif len(part) >= 2 and part[0:2].isdigit() and 0 < int(part[0:2]) <= 23:
+            numbers_found = part[0:2]
         elif len(part) > len(best_candidate):
             best_candidate = part
 
@@ -181,6 +190,8 @@ def __image_city(read_values):
             numbers = city_parts[index + 1]
             if 0 < len(numbers) <= 2 and numbers.isdigit():
                 best_candidate = best_candidate + ' ' + numbers
+    elif best_candidate not in cities and len(numbers_found) == 2:
+        best_candidate = 'Budapest ' + numbers_found
 
     return ConfidenceValue(value=best_candidate.title(), confidence=confidence_level)
 
@@ -257,6 +268,12 @@ for point in kp_array:
     temp = cv2.KeyPoint(x=point[0][0],y=point[0][1],_size=point[1], _angle=point[2], _response=point[3], _octave=point[4], _class_id=point[5])
     old_card_kp1.append(temp)
 
+(kp_array, old_card_des1_alt) = pickle.load(open("data/template_old_camera_old.id_data", "rb"))
+old_card_kp1_alt = []
+for point in kp_array:
+    temp = cv2.KeyPoint(x=point[0][0],y=point[0][1],_size=point[1], _angle=point[2], _response=point[3], _octave=point[4], _class_id=point[5])
+    old_card_kp1_alt.append(temp)
+
 (kp_array, new_card_des1) = pickle.load(open("data/template_new_camera.id_data", "rb"))
 new_card_kp1 = []
 for point in kp_array:
@@ -298,7 +315,7 @@ def __get_image_part(img, coordinates):
     return img[coordinates[0][1]:coordinates[1][1], coordinates[0][0]:coordinates[1][0]]
 
 
-def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, runlevel = 0):
+def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, runlevel = 0, use_alternate_card = False):
     MIN_MATCH_COUNT = 5
 
     img_height, img_width = input_img.shape[0:2]
@@ -310,7 +327,10 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
 
     # find the keypoints and descriptors with SIFT
     if card_type == CardType.OLD_CARD:
-        kp1, des1 = old_card_kp1, old_card_des1
+        if use_alternate_card:
+            kp1, des1 = old_card_kp1_alt, old_card_des1_alt
+        else:
+            kp1, des1 = old_card_kp1, old_card_des1
     elif card_type == CardType.NEW_CARD:
         kp1, des1 = new_card_kp1, new_card_des1
 
@@ -340,6 +360,7 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
             img2 = cv2.warpPerspective(input_img, M, card_sizes[card_type])
             #cv2.imshow("TEST", img2)
             #cv2.waitKey(0)
+            #cv2.imwrite("test_transformed_fast.png", img2, (cv2.IMWRITE_PNG_COMPRESSION, 0))
             return img2
 
         offset = 40
@@ -355,7 +376,7 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
 
         img2 = cv2.warpPerspective(input_img, M, (card_sizes[card_type][0] + int(2 * offset), card_sizes[card_type][1] + int(2 * offset)))
 
-        img2 = cv2.fastNlMeansDenoisingColored(img2, None, 10, 10, 5, 21)
+        #img2 = cv2.fastNlMeansDenoisingColored(img2, None, 10, 10, 7, 21)
 
         kp2, des2 = sift.detectAndCompute(img2, None)
 
@@ -382,12 +403,13 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
                 return "Transform not found"
 
             img2 = cv2.warpPerspective(img2, M, card_sizes[card_type])
+            #cv2.imwrite("test_transformed.png", img2, (cv2.IMWRITE_PNG_COMPRESSION, 0))
             #cv2.imshow("TEST", img2)
             #cv2.waitKey(0)
 
             return img2
         else:
-            return img2[offset:,offset:,:]
+            return img2[offset:-offset,offset:-offset,:]
     else:
         return "Transform not found"
 
@@ -400,12 +422,10 @@ def __get_barcode_data(img):
         info = pyzbar.pyzbar.decode(barcode_image)
         if len(info) == 0:
             continue
-        else:
-            break
 
-    for barcode in info:
-        if barcode.type == "CODE128" or barcode.type == "I25":
-            return barcode.data.decode("UTF-8")
+        for barcode in info:
+            if (barcode.type == "CODE128" or barcode.type == "I25") and __is_valid_id_num(barcode.data.decode("UTF-8")):
+                return barcode.data.decode("UTF-8")
 
     return None
 
@@ -419,7 +439,7 @@ def __get_datamatrix_data(img):
         if len(info) == 0:
             continue
         else:
-            break#
+            break
 
     for barcode in info:
         return barcode.data.decode("UTF-8")
@@ -453,60 +473,9 @@ def __add_to_list(dict, key, value):
         dict[key].append(value)
 
 
-def validate_id_card(img, runlevel, validating_fields):
-    validating_fields = dict(validating_fields)
-    unchecked_fields = set()
-
-    for key in validating_fields:
-        unchecked_fields.add(key)
-
-    ###read_id_card
-    start_time = time.time()
-
-    original_img = img
-
-    if runlevel == 0:
-        transform_target_width = 480
-    else:
-        transform_target_width = 1280
-
-    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel)
-    card_type = CardType.OLD_CARD
-    if type(img) is str:
-        card_type = CardType.NEW_CARD
-        img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
-        if type(img) is str:
-            return __get_barcode_response(original_img)
-
-    # Barcode detection
-    start_time = time.time()
-    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
-    if barcode_id_num is None:
-        if card_type == CardType.OLD_CARD:
-            img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
-            card_type = CardType.NEW_CARD
-            if type(img) is str:
-                return __get_barcode_response(original_img)
-            else:
-                # cv2.imshow("Test", img)
-                # cv2.waitKey(0)
-                barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
-                if barcode_id_num is None:
-                    return __get_barcode_response(original_img)
-        else:
-            return __get_barcode_response(original_img)
-
-    real_id_num = barcode_id_num
-
-    real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'),
-                                    confidence=random.randint(90, 100))
-
-    start_time = time.time()
+def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu, use_blur):
 
     name = birthplace = mother_name_1 = mother_name_2 = release_date = serial_number = None
-    found_name = found_mother_1 = found_mother_2 = False
-
-    run_otsu = False
 
     if runlevel == 0:
         if card_type == CardType.OLD_CARD:
@@ -523,7 +492,7 @@ def validate_id_card(img, runlevel, validating_fields):
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
-                                                                   lang="hun_fast", run_otsu=run_otsu)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -556,7 +525,7 @@ def validate_id_card(img, runlevel, validating_fields):
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
-                                                                   lang="hun_fast", run_otsu=run_otsu)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -587,7 +556,7 @@ def validate_id_card(img, runlevel, validating_fields):
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                   lang="hun_fast", run_otsu=run_otsu)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -622,7 +591,7 @@ def validate_id_card(img, runlevel, validating_fields):
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                   lang="hun_fast", run_otsu=run_otsu)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -649,18 +618,10 @@ def validate_id_card(img, runlevel, validating_fields):
             if "serial_number" in unchecked_fields:
                 serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
 
-    found_fields = {}
-
     if 'serial_number' in unchecked_fields:
+        if serial_number != validating_fields['serial_number']:
+            __add_to_list(found_fields, 'serial_number', serial_number)
         unchecked_fields.remove('serial_number')
-
-    if 'id_number' in unchecked_fields:
-        unchecked_fields.remove('id_number')
-
-    if 'birthdate' in unchecked_fields:
-        unchecked_fields.remove('birthdate')
-        if validating_fields['birthdate'][-1] == '.':
-            validating_fields['birthdate'] = validating_fields['birthdate'][0:-1]
 
     if 'name' in unchecked_fields and name is not None:
         if name.value == validating_fields['name']:
@@ -694,183 +655,95 @@ def validate_id_card(img, runlevel, validating_fields):
         else:
             __add_to_list(found_fields, 'release_date', release_date)
 
-    if len(unchecked_fields) != 0:
-        run_otsu = True
-        if runlevel == 0:
-            if card_type == CardType.OLD_CARD:
-                image_parts = []
-                if "name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
-                if "birthplace" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                if "mother_name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
-                if "release_date" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
 
-                if len(image_parts) != 0:
-                    tesseract_output = __run_tesseract_multiple_images(image_parts,
-                                                                       extension_configs=["bazaar_complete"],
-                                                                       lang="hun_fast", run_otsu=run_otsu)
-                else:
-                    tesseract_output = []
+def validate_id_card(img, runlevel, validating_fields):
+    validating_fields = dict(validating_fields)
+    unchecked_fields = set()
 
-                i = 0
-                if "name" in unchecked_fields:
-                    name, found_name = __image_name(tesseract_output[i])
-                    i += 1
-                if "birthplace" in unchecked_fields:
-                    birthplace = __image_city(tesseract_output[i])
-                    i += 1
-                if "mother_name" in unchecked_fields:
-                    mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
-                    i += 1
-                    mother_name_2, found_mother_2 = __image_name(tesseract_output[i])
-                    i += 1
-                if "release_date" in unchecked_fields:
-                    release_date = __image_digits(tesseract_output[i])
-                serial_number = None
+    for key in validating_fields:
+        unchecked_fields.add(key)
+
+    ###read_id_card
+    start_time = time.time()
+
+    original_img = img
+
+    if runlevel == 0:
+        transform_target_width = 640
+    else:
+        transform_target_width = 1280
+
+    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel)
+    card_type = CardType.OLD_CARD
+    if type(img) is str:
+        card_type = CardType.NEW_CARD
+        img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
+        if type(img) is str:
+            return __get_barcode_response(original_img)
+
+    #print("Warp time: " + str((time.time() - start_time)))
+
+    # Barcode detection
+    start_time = time.time()
+    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+    if barcode_id_num is None:
+        if card_type == CardType.OLD_CARD:
+            img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
+            card_type = CardType.NEW_CARD
+            if type(img) is str:
+                return __get_barcode_response(original_img)
             else:
-                image_parts = []
-                if "name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                if "birthplace" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
-                if "mother_name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
-                if "release_date" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][6]))
-
-                if len(image_parts) != 0:
-                    tesseract_output = __run_tesseract_multiple_images(image_parts,
-                                                                       extension_configs=["bazaar_complete"],
-                                                                       lang="hun_fast", run_otsu=run_otsu)
-                else:
-                    tesseract_output = []
-
-                i = 0
-                if "name" in unchecked_fields:
-                    name, found_name = __image_name(tesseract_output[0] + tesseract_output[1][1:])
-                    i += 2
-                if "birthplace" in unchecked_fields:
-                    birthplace = __image_city(tesseract_output[i])
-                    i += 1
-                if "mother_name" in unchecked_fields:
-                    mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
-                    mother_name_2, found_mother_2 = None, False
-                    i += 1
-                if "release_date" in unchecked_fields:
-                    release_date = __image_digits(tesseract_output[i])
-                if "serial_number" in unchecked_fields:
-                    serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
-
+                # cv2.imshow("Test", img)
+                # cv2.waitKey(0)
+                barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                if barcode_id_num is None:
+                    return __get_barcode_response(original_img)
         else:
-            if card_type == CardType.OLD_CARD:
-                image_parts = []
-                if "name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
-                if "mother_name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+            return __get_barcode_response(original_img)
 
-                if len(image_parts) != 0:
-                    tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                       lang="hun_fast", run_otsu=run_otsu)
-                else:
-                    tesseract_output = []
+    real_id_num = barcode_id_num
+    #print("Barcode time: " + str((time.time() - start_time)))
 
-                i = 0
-                if "name" in unchecked_fields:
-                    name, found_name = __image_name(tesseract_output[0])
-                    i += 1
-                if "mother_name" in unchecked_fields:
-                    mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
-                    mother_name_2, found_mother_2 = __image_name(tesseract_output[i + 1])
+    real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'),
+                                    confidence=random.randint(90, 100))
 
-                if "birthplace" in unchecked_fields:
-                    tesseract_output = __run_tesseract_multiple_images(
-                        [__get_image_part(img, field_coordinates[card_type][2])
-                         ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
-                    birthplace = __image_city(tesseract_output[0])
+    if 'id_number' in unchecked_fields:
+        unchecked_fields.remove('id_number')
 
-                if "release_date" in unchecked_fields:
-                    tesseract_output = __run_tesseract_multiple_images(
-                        [__get_image_part(img, field_coordinates[card_type][5])
-                         ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
-                    release_date = __image_digits(tesseract_output[0])
+    if 'birthdate' in unchecked_fields:
+        unchecked_fields.remove('birthdate')
+        if validating_fields['birthdate'][-1] == '.':
+            validating_fields['birthdate'] = validating_fields['birthdate'][0:-1]
 
-                serial_number = None
-            else:
-                image_parts = []
-                if "name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                if "mother_name" in unchecked_fields:
-                    image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+    run_otsu = False
 
-                if len(image_parts) != 0:
-                    tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                       lang="hun_fast", run_otsu=run_otsu)
-                else:
-                    tesseract_output = []
+    found_fields = {}
 
-                i = 0
-                if "name" in unchecked_fields:
-                    name, found_name = __image_name(tesseract_output[0] + tesseract_output[1][1:])
-                    i += 2
-                if "mother_name" in unchecked_fields:
-                    mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
-                    mother_name_2, found_mother_2 = None, False
+    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False)
+    if len(unchecked_fields) != 0:
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False)
+    if len(unchecked_fields) != 0:
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True)
+    if len(unchecked_fields) != 0:
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True)
 
-                if "birthplace" in unchecked_fields:
-                    tesseract_output = __run_tesseract_multiple_images(
-                        [__get_image_part(img, field_coordinates[card_type][4])
-                         ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
-                    birthplace = __image_city(tesseract_output[0])
+    if card_type == CardType.OLD_CARD and len(unchecked_fields) != 0:
+        img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel, use_alternate_card=True)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                run_otsu=False, use_blur=False)
+        if len(unchecked_fields) != 0:
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                    run_otsu=True, use_blur=False)
+        if len(unchecked_fields) != 0:
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                    run_otsu=True, use_blur=True)
+        if len(unchecked_fields) != 0:
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                    run_otsu=False, use_blur=True)
 
-                if "release_date" in unchecked_fields:
-                    tesseract_output = __run_tesseract_multiple_images(
-                        [__get_image_part(img, field_coordinates[card_type][6])
-                         ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
-                    release_date = __image_digits(tesseract_output[0])
-
-                if "serial_number" in unchecked_fields:
-                    serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
-
-        if 'name' in unchecked_fields and name is not None:
-            if name.value == validating_fields['name']:
-                unchecked_fields.remove('name')
-            else:
-                __add_to_list(found_fields, 'name', name)
-
-        if 'birthplace' in unchecked_fields and birthplace is not None:
-            if (birthplace.value == validating_fields['birthplace']):
-                unchecked_fields.remove('birthplace')
-            else:
-                __add_to_list(found_fields, 'birthplace', birthplace)
-
-        if 'mother_name' in unchecked_fields:
-            if mother_name_1 is not None:
-                if mother_name_1.value == validating_fields['mother_name']:
-                    unchecked_fields.remove('mother_name')
-                else:
-                    __add_to_list(found_fields, 'mother_name', mother_name_1)
-            if mother_name_2 is not None:
-                if mother_name_2.value == validating_fields['mother_name']:
-                    unchecked_fields.remove('mother_name')
-                else:
-                    __add_to_list(found_fields, 'mother_name', mother_name_2)
-
-        if 'release_date' in unchecked_fields and release_date is not None:
-            if release_date.value == validating_fields['release_date']:
-                unchecked_fields.remove('release_date')
-            else:
-                __add_to_list(found_fields, 'release_date', release_date)
 
     valid_failed = False
-    valid_success = len(unchecked_fields) == 0
+    valid_success = True
 
     response = {}
     if 'id_number' in validating_fields:
@@ -893,31 +766,28 @@ def validate_id_card(img, runlevel, validating_fields):
                                                        possible_values=[real_birthday])
         del validating_fields['birthdate']
 
-    if 'serial_number' in validating_fields:
-        if serial_number == validating_fields['serial_number']:
-            response['serial_number'] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
-        else:
-            valid_failed = True
-            valid_success = False
-            response['serial_number'] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=100),
-                                                       possible_values=[ConfidenceValue(serial_number, confidence=100)])
-        del validating_fields['serial_number']
-
     for key in validating_fields:
         if key not in unchecked_fields:
             response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
         elif found_fields[key] is not None:
             maxValue = -1
             maxField = ""
+
+            field_parts = validating_fields[key].split(' ')
             for conf in found_fields[key]:
+                field_parts[:] = [part for part in field_parts if (part not in conf.value.split(' '))]
                 if int(conf.confidence) > maxValue and conf.value is not None and type(conf.value) is str and len(conf.value) != 0:
                     maxValue = int(conf.confidence)
                     maxField = conf
 
-            if maxValue == -1:
+            if len(field_parts) == 0:
+                response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
+            elif maxValue == -1:
                 response[key] = CheckResponseField(validation_result=ConfidenceValue(False, maxValue))
+                valid_success = False
             else:
                 response[key] = CheckResponseField(possible_values=[maxField], validation_result=ConfidenceValue(False, maxValue))
+                valid_success = False
         else:
             response[key] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=0))
 
@@ -925,7 +795,8 @@ def validate_id_card(img, runlevel, validating_fields):
     response['validation_failed'] = valid_failed
     return response
 
-def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
+
+def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur = False):
     start_time = time.time()
 
     original_img = img
@@ -960,6 +831,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
             return __get_barcode_response(original_img)
 
     real_id_num = barcode_id_num
+    #print("Barcode time: " + str((time.time() - start_time)))
 
     real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'), confidence=random.randint(90,100))
 
@@ -992,7 +864,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
                 image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
 
             if len(image_parts) != 0:
-                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu)
+                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -1024,7 +896,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
                 image_parts.append(__get_image_part(img, field_coordinates[card_type][6]))
 
             if len(image_parts) != 0:
-                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu)
+                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -1054,7 +926,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
                 image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
 
             if len(image_parts) != 0:
-                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu)
+                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -1068,12 +940,12 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
 
             if "birthplace" not in filter_fields:
                 tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][2])
-                                                                    ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
+                                                                    ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" not in filter_fields:
                 tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][5])
-                                                                    ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
+                                                                    ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 release_date = __image_digits(tesseract_output[0])
 
             serial_number = None
@@ -1086,7 +958,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
                 image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
 
             if len(image_parts) != 0:
-                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu)
+                tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
             else:
                 tesseract_output = []
 
@@ -1100,17 +972,19 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False):
 
             if "birthplace" not in filter_fields:
                 tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][4])
-                                                                    ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
+                                                                    ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" not in filter_fields:
                 tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][6])
-                                                                    ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
+                                                                    ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 release_date = __image_digits(tesseract_output[0])
 
             if "serial_number" not in filter_fields:
                 serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
 
+
+    #print("Read time: " + str((time.time() - start_time)))
 
     if mother_name_2 is None:
         mother_name_primary = mother_name_1

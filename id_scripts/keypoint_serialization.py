@@ -11,6 +11,24 @@ def __get_template_old_image_mask(width, height):
     ret[580:, :40] = 0
     ret[590:, :] = 0
     ret[560:, 920:] = 0
+    ret[85:133, 310:653] = 0
+    ret[155:228, 142:465] = 0
+    ret[282:317,96:607] = 0
+    ret[325:362,232:559] = 0
+    ret[359:391,97:334] = 0
+    ret[389:423,575:756] = 0
+    ret[465:540,310:736] = 0
+    return ret
+
+def __get_template_old_image_mask_old(width, height):
+    ret = np.ones((height, width), np.uint8) * 255
+    ret[:6, :] = 0
+    ret[:40, 900:] = 0
+    ret[:, 934:] = 0
+    ret[:, :12] = 0
+    ret[580:, :40] = 0
+    ret[590:, :] = 0
+    ret[560:, 920:] = 0
     ret[87:133, 345:653] = 0
     ret[159:228, 152:465] = 0
     ret[282:315,96:601] = 0
@@ -44,12 +62,12 @@ def __get_template_new_image_mask(width, height):
 
 
 if __name__ == "__main__":
-    img1 = cv2.imread('test_images/uj_kartya.png') # queryImage
+    img1 = cv2.imread('/home/dani/Desktop/taxid_ocr/adokartyaocr/test_transformed_2.png') # queryImage
     sift = cv2.xfeatures2d.SIFT_create()
-    mask = __get_template_new_image_mask(img1.shape[1], img1.shape[0])
-    #cv2.imshow("Masked", cv2.bitwise_and(cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY), mask))
-    #cv2.waitKey(0)
-    #cv2.destroyAllWindows()
+    mask = __get_template_old_image_mask(img1.shape[1], img1.shape[0])
+    cv2.imshow("Masked", cv2.bitwise_and(cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY), mask))
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
     kp, des = sift.detectAndCompute(img1, mask)
 
     index = []
@@ -57,9 +75,9 @@ if __name__ == "__main__":
         temp = (point.pt, point.size, point.angle, point.response, point.octave, point.class_id)
         index.append(temp)
 
-    pickle.dump((index, des), open("template_new_camera.id_data", "wb"))
+    pickle.dump((index, des), open("data/template_old_camera.id_data", "wb"))
 
-    (kp_array, des_copy) = pickle.load(open("template_new_camera.id_data", "rb"))
+    (kp_array, des_copy) = pickle.load(open("data/template_old_camera.id_data", "rb"))
 
     kp_copy = []
 
