@@ -1,5 +1,7 @@
 import subprocess
+import sys
 import tempfile
+import traceback
 
 import cv2
 import numpy as np
@@ -116,53 +118,60 @@ def check_id_post(image, apiKey, name=None, birthdate=None, mothername=None, rel
 
     :rtype: CheckResponse
     """
-    if apiKey not in content:
-        return Error("Invalid ApiKey provided!")
 
-    if runlevel is None:
-        runlevel = 0
+    try:
+        if apiKey not in content:
+            return Error("Invalid ApiKey provided!")
 
-    img = __get_image_from_stream(image, runlevel)
-    if type(img) is Error:
-        return img
+        if runlevel is None:
+            runlevel = 0
 
-    validate_fields = {}
-    if name is not None:
-        validate_fields['name'] = name.strip()
-    if birthdate is not None:
-        validate_fields['birthdate'] = birthdate
-    if mothername is not None:
-        validate_fields['mother_name'] = mothername
-    if releasedate is not None:
-        validate_fields['release_date'] = releasedate
-    if id_num is not None:
-        validate_fields['id_number'] = id_num
-    if birthplace is not None:
-        validate_fields['birthplace'] = birthplace
+        img = __get_image_from_stream(image, runlevel)
+        if type(img) is Error:
+            return img
 
-    card = id_card.validate_id_card(img, runlevel, validate_fields)
-    if type(card) is str:
-        return Error(card)
-    elif type(card) is not dict:
-        return Error("Couldn't find card on image.")
-    else:
+        validate_fields = {}
+        if name is not None:
+            validate_fields['name'] = name.strip()
+        if birthdate is not None:
+            validate_fields['birthdate'] = birthdate
+        if mothername is not None:
+            validate_fields['mother_name'] = mothername
+        if releasedate is not None:
+            validate_fields['release_date'] = releasedate
+        if id_num is not None:
+            validate_fields['id_number'] = id_num
+        if birthplace is not None:
+            validate_fields['birthplace'] = birthplace
 
-        if card['validation_failed']:
-            result = 'reject'
-        elif card['validation_success']:
-            result = 'accept'
+        card = id_card.validate_id_card(img, runlevel, validate_fields)
+        if type(card) is str:
+            return Error(card)
+        elif type(card) is not dict:
+            return Error("Card not found.")
         else:
-            result = 'validate'
 
-        return CheckResponse(
-            id_num=None if id_num is None else card['id_number'],
-            birthdate=None if birthdate is None else card['birthdate'],
-            name=None if name is None else card['name'],
-            mother_name=None if mothername is None else card['mother_name'],
-            release_date=None if releasedate is None else card['release_date'],
-            birthplace=None if birthplace is None else card['birthplace'],
-            validation_result=result
-        )
+            if card['validation_failed']:
+                result = 'reject'
+            elif card['validation_success']:
+                result = 'accept'
+            else:
+                result = 'validate'
+
+            return CheckResponse(
+                id_num=None if id_num is None else card['id_number'],
+                birthdate=None if birthdate is None else card['birthdate'],
+                name=None if name is None else card['name'],
+                mother_name=None if mothername is None else card['mother_name'],
+                release_date=None if releasedate is None else card['release_date'],
+                birthplace=None if birthplace is None else card['birthplace'],
+                validation_result=result
+            )
+    except:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+        print(''.join('!! ' + line for line in lines) , file=sys.stderr) # Log it or whatever here
+        return Error("Card not found.")
 
 def read_id_post(image, apiKey, runlevel=None):  # noqa: E501
     """Extract information from the submitted card
@@ -216,3 +225,4 @@ def test_cpu_get():  # noqa: E501
             return cpu.read()
     except IOError as e:
         return Error("I/O error({0}): {1}".format(e.errno, e.strerror))
+
