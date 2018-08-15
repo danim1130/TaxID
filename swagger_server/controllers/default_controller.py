@@ -225,4 +225,3 @@ def test_cpu_get():  # noqa: E501
             return cpu.read()
     except IOError as e:
         return Error("I/O error({0}): {1}".format(e.errno, e.strerror))
-
