@@ -23,7 +23,7 @@ birthplace_regex = re.compile('[^a-zA-Z0-9áÁéÉíÍóÓöÖőŐüÜúÚ\- ]')
 date_regex = re.compile('[^0-9]')
 
 
-def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = False, blur_image = False, cluster_image = False):
+def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = False, blur_image = False, cluster_image_num = 0):
     start_time = time.time()
     for i in range(0, len(images)):
         image = images[i]
@@ -35,14 +35,14 @@ def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = 
             #image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, (5, 5), iterations=1, borderValue=255)
             #image = cv2.morphologyEx(image, cv2.MORPH_DILATE, (5, 1), iterations=5, borderValue=255)
             image = cv2.copyMakeBorder(image, 25, 25, 15, 15, cv2.BORDER_CONSTANT, value=255)
-        elif cluster_image:
+        elif cluster_image_num != 0:
             if blur_image:
                 image = cv2.GaussianBlur(image, (5,5), 0.7)
 
             Z = image.reshape((-1, 3))
             Z = np.float32(Z)
             criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-            K = 5
+            K = cluster_image_num
             ret, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
             center = np.uint8(center)
             minIndex = 0
@@ -320,10 +320,10 @@ field_coordinates = [
     [ #OLD_CARD
         [[285, 450], [770, 550]], #barcode
         [[140, 140], [720, 220]], #name
-        [[385, 280], [710, 325]], #birthplace
+        [[385, 240], [710, 325]], #birthplace
         [[210, 320], [745, 370]], #mother_name_primary
-        [[65, 355], [455, 400]], #mother_name_secondary
-        [[565, 385], [770, 435]], #release data
+        [[65, 355], [775, 400]], #mother_name_secondary
+        [[565, 365], [770, 435]], #release data
     ],
     [ #NEW_CARD
         [[335, 583], [616, 675]], #barcode
@@ -499,7 +499,7 @@ def __add_to_list(dict, key, value):
         dict[key].append(value)
 
 
-def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu, use_blur, use_cluster):
+def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu, use_blur, cluster_image_num):
 
     name = birthplace = mother_name_1 = mother_name_2 = release_date = serial_number = None
 
@@ -518,7 +518,7 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
-                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image=use_cluster)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image_num=cluster_image_num)
             else:
                 tesseract_output = []
 
@@ -551,7 +551,7 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
-                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image=use_cluster)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image_num=cluster_image_num)
             else:
                 tesseract_output = []
 
@@ -582,7 +582,7 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image=use_cluster)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image_num=cluster_image_num)
             else:
                 tesseract_output = []
 
@@ -776,37 +776,44 @@ def validate_id_card(img, runlevel, validating_fields):
 
     found_fields = {}
 
-    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, use_cluster=False)
     if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, use_cluster=False)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=5)
     if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, use_cluster=True)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6)
     if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, use_cluster=True)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=5)
     if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True, use_cluster=False)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=0)
     if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, use_cluster=False)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0)
+    if len(unchecked_fields) != 0:
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True, cluster_image_num=0)
+    if len(unchecked_fields) != 0:
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=0)
 
     if card_type == CardType.OLD_CARD and len(unchecked_fields) != 0 and alternate_card_used == False:
         img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel, use_alternate_card=True)
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                run_otsu=False, use_blur=False, use_cluster=False)
         if len(unchecked_fields) != 0:
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=True, use_blur=False, use_cluster=False)
+                                    run_otsu=False, use_blur=False, cluster_image_num=5)
         if len(unchecked_fields) != 0:
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=False, use_cluster=True)
+                                    run_otsu=False, use_blur=False, cluster_image_num=6)
         if len(unchecked_fields) != 0:
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=True, use_cluster=True)
+                                    run_otsu=False, use_blur=True, cluster_image_num=5)
         if len(unchecked_fields) != 0:
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=True, use_blur=True, use_cluster=False)
+                                run_otsu=False, use_blur=False, cluster_image_num=0)
         if len(unchecked_fields) != 0:
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=True, use_cluster=False)
+                                    run_otsu=True, use_blur=False, cluster_image_num=0)
+        if len(unchecked_fields) != 0:
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                    run_otsu=True, use_blur=True, cluster_image_num=0)
+        if len(unchecked_fields) != 0:
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                    run_otsu=False, use_blur=True, cluster_image_num=0)
 
 
     valid_failed = False
