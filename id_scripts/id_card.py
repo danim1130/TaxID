@@ -14,6 +14,9 @@ import id_scripts.pytesseract as pytesseract
 import time
 from swagger_server.models.confidence_value import ConfidenceValue
 from swagger_server.models.check_response_field import CheckResponseField
+#from tesserocr import PyTessBaseAPI, PSM
+#from PIL import Image
+
 
 Response = namedtuple('ID_Card', 'id_num name birthday birthplace mother_name_primary mother_name_secondary release_date type serial_number valid')
 
@@ -66,7 +69,6 @@ def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = 
 
 
     read_str = pytesseract.run_multiple_and_get_output(images, extension='tsv', extension_configs=extension_configs, config="--psm 7", lang=lang)
-    #print("Tesseract time: " + str(time.time() - start_time))
     #for idx, image in enumerate(images):
         #cv2.imshow("TEST", image)
         #cv2.waitKey(0)
@@ -92,6 +94,25 @@ def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = 
         ret_list[-1].append(next_row)
 
     return ret_list
+    #ret_list = []
+    #with PyTessBaseAPI(lang=lang, psm=PSM.SINGLE_LINE) as api:
+    #    for img in images:
+    #        pil_im = Image.fromarray(img)
+    #        api.SetImage(pil_im)
+    #        ret_part = [["text","conf"]]
+    #        texts_original = api.GetUTF8Text()
+    #        texts = texts_original.split()
+    #        confidences = api.AllWordConfidences()
+    #        for i in range(0, len(texts)):
+    #            ret_part.append([texts[i], confidences[i]])
+    #        ret_list.append(ret_part)
+    ##print("Tesseract time: " + str(time.time() - start_time))
+    ##for idx, image in enumerate(images):
+    #    #cv2.imshow("TEST", image)
+    #    #cv2.waitKey(0)
+    #    #cv2.imwrite("test%d.png" % idx, image, (cv2.IMWRITE_PNG_COMPRESSION, 0))
+#
+    #return ret_list
 
 
 def __image_digits(read_values):
@@ -320,7 +341,7 @@ field_coordinates = [
     [ #OLD_CARD
         [[285, 450], [770, 550]], #barcode
         [[140, 140], [720, 220]], #name
-        [[385, 240], [710, 325]], #birthplace
+        [[385, 270], [710, 325]], #birthplace
         [[210, 320], [745, 370]], #mother_name_primary
         [[65, 355], [775, 400]], #mother_name_secondary
         [[565, 365], [770, 435]], #release data
@@ -439,8 +460,7 @@ def __get_transform_sift_for_type(input_img, card_type, target_width = 1280, run
     else:
         return "Transform not found"
 
-
-def __get_barcode_data(img):
+def __read_barcode_image(img):
     for i in range(1, 5):
         barcode_x_scale = 1 / i
         barcode_image = cv2.resize(img, (0, 0), fx=barcode_x_scale, fy=1)
@@ -453,7 +473,43 @@ def __get_barcode_data(img):
             if (barcode.type == "CODE128" or barcode.type == "I25") and __is_valid_id_num(barcode.data.decode("UTF-8")):
                 return barcode.data.decode("UTF-8")
 
-    return None
+
+def __get_barcode_data(original_img):
+    ret = __read_barcode_image(original_img)
+    if ret is not None:
+        return ret
+
+    image = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+    image = cv2.GaussianBlur(image, (5, 5), 0.7)
+    _, image = cv2.threshold(image, 0, 255, cv2.THRESH_OTSU)
+    img = cv2.copyMakeBorder(image, 25, 25, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    ret = __read_barcode_image(img)
+    if ret is not None:
+        return ret
+    else:
+        Z = original_img.reshape((-1, 3))
+        Z = np.float32(Z)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        K = 5
+        ret, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        center = np.uint8(center)
+        minIndex = 0
+        for j in range(1, K):
+            if (sum(center[j]) < sum(center[minIndex])):
+                minIndex = j
+
+        for j in range(0, K):
+            if minIndex == j:
+                center[j][:] = 0
+            else:
+                center[j][:] = 255
+
+        res = center[label.flatten()]
+        img = res.reshape((original_img.shape))
+
+        img = cv2.erode(img, np.ones((50,3),np.uint8))
+        return __read_barcode_image(img)
+
 
 
 def __get_datamatrix_data(img):
@@ -617,7 +673,7 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
-                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image=use_cluster)
+                                                                   lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur, cluster_image_num=cluster_image_num)
             else:
                 tesseract_output = []
 
@@ -694,20 +750,20 @@ def validate_id_card(img, runlevel, validating_fields):
 
     original_img = img
 
-    if runlevel == 0:
-        transform_target_width = 640
-    else:
-        transform_target_width = 1280
+    #if runlevel == 0:
+    transform_target_width = 640
+    #else:
+    #    transform_target_width = 1280
 
     alternate_card_used = False
-    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel)
+    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0)
     card_type = CardType.OLD_CARD
     if type(img) is str:
         alternate_card_used = True
-        img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel, use_alternate_card=True)
+        img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
         if type(img) is str:
             card_type = CardType.NEW_CARD
-            img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
+            img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0)
             if type(img) is str:
                 return __get_barcode_response(original_img)
 
@@ -718,7 +774,7 @@ def validate_id_card(img, runlevel, validating_fields):
     if barcode_id_num is None:
         if card_type == CardType.OLD_CARD:
             if alternate_card_used:
-                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel)
+                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0)
                 card_type = CardType.NEW_CARD
                 if type(img) is str:
                     return __get_barcode_response(original_img)
@@ -730,9 +786,9 @@ def validate_id_card(img, runlevel, validating_fields):
                         return __get_barcode_response(original_img)
             else:
                 alternate_card_used = True
-                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, runlevel, use_alternate_card=True)
+                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0, use_alternate_card=True)
                 if type(img) is str:
-                    img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,runlevel)
+                    img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,0)
                     card_type = CardType.NEW_CARD
                     if type(img) is str:
                         return __get_barcode_response(original_img)
@@ -747,7 +803,7 @@ def validate_id_card(img, runlevel, validating_fields):
                     barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
                     if barcode_id_num is None:
                         img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,
-                                                            runlevel)
+                                                            0)
                         card_type = CardType.NEW_CARD
                         if type(img) is str:
                             return __get_barcode_response(original_img)
@@ -775,45 +831,50 @@ def validate_id_card(img, runlevel, validating_fields):
             validating_fields['birthdate'] = validating_fields['birthdate'][0:-1]
 
     found_fields = {}
-
-    if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=5)
-    if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6)
-    if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=5)
-    if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=0)
-    if len(unchecked_fields) != 0:
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0)
-    if len(unchecked_fields) != 0:
+    if len(unchecked_fields) != 0:  #79
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                run_otsu=False, use_blur=True, cluster_image_num=5)
+    if len(unchecked_fields) != 0: #79
         __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True, cluster_image_num=0)
-    if len(unchecked_fields) != 0:
+    if len(unchecked_fields) != 0: #77
         __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=0)
-
-    if card_type == CardType.OLD_CARD and len(unchecked_fields) != 0 and alternate_card_used == False:
-        img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, runlevel, use_alternate_card=True)
-        if len(unchecked_fields) != 0:
+    if len(unchecked_fields) <= 3:
+        if len(unchecked_fields) != 0: #75
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0)
+        if len(unchecked_fields) != 0:  #71
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
                                     run_otsu=False, use_blur=False, cluster_image_num=5)
-        if len(unchecked_fields) != 0:
+    if len(unchecked_fields) <= 2:
+        if len(unchecked_fields) != 0: #66
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6)
+        if len(unchecked_fields) != 0:  # 65
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=False, cluster_image_num=6)
-        if len(unchecked_fields) != 0:
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=True, cluster_image_num=5)
-        if len(unchecked_fields) != 0:
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                run_otsu=False, use_blur=False, cluster_image_num=0)
-        if len(unchecked_fields) != 0:
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=True, use_blur=False, cluster_image_num=0)
-        if len(unchecked_fields) != 0:
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=True, use_blur=True, cluster_image_num=0)
-        if len(unchecked_fields) != 0:
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=True, cluster_image_num=0)
+                                    run_otsu=False, use_blur=False, cluster_image_num=0)
+        if card_type == CardType.OLD_CARD and alternate_card_used == False:
+            img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
+            if type(img) is not str:
+                if len(unchecked_fields) != 0: #63
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=False, use_blur=True, cluster_image_num=5)
+                if len(unchecked_fields) != 0: #58
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=False, use_blur=False, cluster_image_num=5)
+                if len(unchecked_fields) != 0: #58
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=True, use_blur=True, cluster_image_num=0)
+                if len(unchecked_fields) != 0: #56
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=False, use_blur=True, cluster_image_num=0)
+
+                if len(unchecked_fields) != 0: #54
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=False, use_blur=False, cluster_image_num=6)
+                if len(unchecked_fields) != 0: #51
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=True, use_blur=False, cluster_image_num=0)
+                if len(unchecked_fields) != 0: #48
+                    __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                        run_otsu=False, use_blur=False, cluster_image_num=0)
 
 
     valid_failed = False
@@ -868,6 +929,214 @@ def validate_id_card(img, runlevel, validating_fields):
     response['validation_success'] = valid_success
     response['validation_failed'] = valid_failed
     return response
+
+
+#testresult = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+#
+#
+#def validate_id_card_with_test(img, runlevel, validating_fields):
+#    validating_fields = dict(validating_fields)
+#    unchecked_fields = set()
+#
+#    for key in validating_fields:
+#        unchecked_fields.add(key)
+#
+#    ###read_id_card
+#    start_time = time.time()
+#
+#    original_img = img
+#
+#    #if runlevel == 0:
+#    transform_target_width = 640
+#    #else:
+#    #    transform_target_width = 1280
+#
+#    alternate_card_used = False
+#    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0)
+#    card_type = CardType.OLD_CARD
+#    if type(img) is str:
+#        alternate_card_used = True
+#        img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
+#        if type(img) is str:
+#            card_type = CardType.NEW_CARD
+#            img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0)
+#            if type(img) is str:
+#                return __get_barcode_response(original_img)
+#
+#    #print("Warp time: " + str((time.time() - start_time)))
+#
+#    # Barcode detection
+#    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+#    if barcode_id_num is None:
+#        if card_type == CardType.OLD_CARD:
+#            if alternate_card_used:
+#                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0)
+#                card_type = CardType.NEW_CARD
+#                if type(img) is str:
+#                    return __get_barcode_response(original_img)
+#                else:
+#                    #cv2.imshow("Test", img)
+#                    #cv2.waitKey(0)
+#                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+#                    if barcode_id_num is None:
+#                        return __get_barcode_response(original_img)
+#            else:
+#                alternate_card_used = True
+#                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0, use_alternate_card=True)
+#                if type(img) is str:
+#                    img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,0)
+#                    card_type = CardType.NEW_CARD
+#                    if type(img) is str:
+#                        return __get_barcode_response(original_img)
+#                    else:
+#                        # cv2.imshow("Test", img)
+#                        # cv2.waitKey(0)
+#                        barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+#                        if barcode_id_num is None:
+#                            return __get_barcode_response(original_img)
+#                    return __get_barcode_response(original_img)
+#                else:
+#                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+#                    if barcode_id_num is None:
+#                        img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,
+#                                                            0)
+#                        card_type = CardType.NEW_CARD
+#                        if type(img) is str:
+#                            return __get_barcode_response(original_img)
+#                        else:
+#                            # cv2.imshow("Test", img)
+#                            # cv2.waitKey(0)
+#                            barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+#                            if barcode_id_num is None:
+#                                return __get_barcode_response(original_img)
+#        else:
+#            return __get_barcode_response(original_img)
+#
+#    real_id_num = barcode_id_num
+#    #print("Barcode time: " + str((time.time() - start_time)))
+#
+#    real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'),
+#                                    confidence=random.randint(90, 100))
+#
+#    if 'id_number' in unchecked_fields:
+#        unchecked_fields.remove('id_number')
+#
+#    if 'birthdate' in unchecked_fields:
+#        unchecked_fields.remove('birthdate')
+#        if validating_fields['birthdate'][-1] == '.':
+#            validating_fields['birthdate'] = validating_fields['birthdate'][0:-1]
+#
+#    found_fields = {}
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=5)
+#    testresult[0] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=5)
+#    testresult[1] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=0)
+#    testresult[2] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0)
+#    testresult[3] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=0)
+#    testresult[4] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6)
+#    testresult[5] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields, run_otsu=True, use_blur=True, cluster_image_num=0)
+#    testresult[6] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#
+#    img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=False, use_blur=False, cluster_image_num=5)
+#    testresult[7] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=False, use_blur=False, cluster_image_num=6)
+#    testresult[8] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=False, use_blur=True, cluster_image_num=5)
+#    testresult[9] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                        run_otsu=False, use_blur=False, cluster_image_num=0)
+#    testresult[10] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=True, use_blur=False, cluster_image_num=0)
+#    testresult[11] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=True, use_blur=True, cluster_image_num=0)
+#    testresult[12] += len(unchecked_fields) - len(unchecked_copy)
+#    unchecked_copy = unchecked_fields.copy()
+#    __run_image_field_check(img, card_type, runlevel, unchecked_copy, validating_fields, found_fields,
+#                            run_otsu=False, use_blur=True, cluster_image_num=0)
+#    testresult[13] += len(unchecked_fields) - len(unchecked_copy)
+#
+#    with open("result.txt", "w") as file:
+#        file.write(str(testresult))
+#
+#
+#    valid_failed = False
+#    valid_success = True
+#
+#    response = {}
+#    if 'id_number' in validating_fields:
+#        if real_id_num == validating_fields['id_number']:
+#            response['id_number'] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
+#        else:
+#            valid_failed = True
+#            valid_success = False
+#            response['id_number'] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=100),
+#                                                       possible_values=[ConfidenceValue(real_id_num, confidence=100)])
+#        del validating_fields['id_number']
+#
+#    if 'birthdate' in validating_fields:
+#        if real_birthday is not None and real_birthday.value == validating_fields['birthdate']:
+#            response['birthdate'] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
+#        else:
+#            valid_failed = True
+#            valid_success = False
+#            response['birthdate'] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=100),
+#                                                       possible_values=[real_birthday])
+#        del validating_fields['birthdate']
+#
+#    for key in validating_fields:
+#        if key not in unchecked_fields:
+#            response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
+#        elif found_fields[key] is not None:
+#            maxValue = -1
+#            maxField = ""
+#
+#            field_parts = validating_fields[key].split(' ')
+#            for conf in found_fields[key]:
+#                field_parts[:] = [part for part in field_parts if (part not in conf.value.split(' '))]
+#                if int(conf.confidence) > maxValue and conf.value is not None and type(conf.value) is str and len(conf.value) != 0:
+#                    maxValue = int(conf.confidence)
+#                    maxField = conf
+#
+#            if len(field_parts) == 0:
+#                response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
+#            elif maxValue == -1:
+#                response[key] = CheckResponseField(validation_result=ConfidenceValue(False, maxValue))
+#                valid_success = False
+#            else:
+#                response[key] = CheckResponseField(possible_values=[maxField], validation_result=ConfidenceValue(False, maxValue))
+#                valid_success = False
+#        else:
+#            response[key] = CheckResponseField(validation_result=ConfidenceValue(value=False, confidence=0))
+#
+#    response['validation_success'] = valid_success
+#    response['validation_failed'] = valid_failed
+#    return response
+
 
 
 def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur = False):
