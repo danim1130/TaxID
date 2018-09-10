@@ -11,12 +11,20 @@ import id_scripts.id_card as id_card
 from swagger_server.models import ConfidenceValue, CheckResponse
 from swagger_server.models.error import Error  # noqa: E501
 from swagger_server.models.tax_id_card import TaxIdCard  # noqa: E501
-
+import logging
+from main import application as app
 
 with open("api_keys.txt") as f:
     content = f.readlines()
 
 content = frozenset([x.strip() for x in content])
+
+
+
+if __name__ != '__main__':
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
 
 
 def __gs_pdf_to_png(pdf):
@@ -170,7 +178,7 @@ def check_id_post(image, apiKey, name=None, birthdate=None, mothername=None, rel
     except:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
-        print(''.join('!! ' + line for line in lines) , file=sys.stderr) # Log it or whatever here
+        app.logger.log(logging.ERROR, ''.join('!! ' + line for line in lines)) # Log it or whatever here
         return Error("Card not found.")
 
 def read_id_post(image, apiKey, runlevel=None):  # noqa: E501

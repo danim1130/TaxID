@@ -1,9 +1,10 @@
 import datetime
 import pickle
 import random
-import re
+import logging
 from collections import namedtuple
 from enum import IntEnum
+from main import application as application
 
 import cv2
 import numpy as np
@@ -12,18 +13,18 @@ import pylibdmtx.pylibdmtx
 
 import id_scripts.pytesseract as pytesseract
 import time
+import re
 from swagger_server.models.confidence_value import ConfidenceValue
 from swagger_server.models.check_response_field import CheckResponseField
-#from tesserocr import PyTessBaseAPI, PSM
-#from PIL import Image
-
+import logging
+from main import application as app
 
 Response = namedtuple('ID_Card', 'id_num name birthday birthplace mother_name_primary mother_name_secondary release_date type serial_number valid')
 
 
-name_regex = re.compile('[^a-zA-ZáÁéÉíÍóÓöÖőŐüÜúÚ.\- ]')
+name_regex = re.compile('[^a-zA-ZáÁéÉíÍóÓöÖőŐüÜűŰúÚ.\- ]')
 birthplace_regex = re.compile('[^a-zA-Z0-9áÁéÉíÍóÓöÖőŐüÜúÚ\- ]')
-date_regex = re.compile('[^0-9]')
+date_regex = re.compile('[^0-9.]')
 
 
 def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = False, blur_image = False, cluster_image_num = 0):
@@ -67,15 +68,16 @@ def __run_tesseract_multiple_images(images, extension_configs, lang, run_otsu = 
 
         images[i] = image
 
-
+    start = time.time()
     read_str = pytesseract.run_multiple_and_get_output(images, extension='tsv', extension_configs=extension_configs, config="--psm 7", lang=lang)
+    app.logger.log(logging.INFO, "Single tessract read run: {:.3f}".format(time.time() - start))
     #for idx, image in enumerate(images):
-        #cv2.imshow("TEST", image)
-        #cv2.waitKey(0)
+    #    cv2.imshow("TEST", image)
+    #    cv2.waitKey(0)
         #cv2.imwrite("test%d.png" % idx, image, (cv2.IMWRITE_PNG_COMPRESSION, 0))
 
     read_values = []
-    lines = read_str.split("\n")
+    lines = read_str.split("\n")#
     for line in lines:
         read_values.append(line.split("\t"))
 
@@ -120,33 +122,40 @@ def __image_digits(read_values):
     confidence_level = 0
     text_index = read_values[0].index("text")
     confidence_index = read_values[0].index("conf")
+    date_parts = []
     for i in range(1, len(read_values)):
         if len(read_values[i]) > text_index:
-            name_part_candidate = date_regex.sub('', read_values[i][text_index]).lstrip().rstrip()
-            if len(name_part_candidate) == 8:
-                date = name_part_candidate
+            date_parts_candidate = re.findall(r'\d+', read_values[i][text_index])
+            #name_part_candidate = date_regex.sub('', read_values[i][text_index]).lstrip().rstrip()
+            #date_parts_candidate = name_part_candidate.split(".")
+            if 3 <= len(date_parts_candidate) <= 4 \
+                    and len(date_parts_candidate[0]) == 4 and date_parts_candidate[0].isdigit() \
+                    and len(date_parts_candidate[1]) <= 2 and date_parts_candidate[1].isdigit() \
+                    and len(date_parts_candidate[2]) <= 2 and date_parts_candidate[2].isdigit() :
+                date_parts = date_parts_candidate
                 confidence_level = int(read_values[i][confidence_index])
+                break
 
-    if len(date) == 0:
+    if len(date_parts) == 0:
         return ConfidenceValue(value="", confidence=0)
 
-    year = int(date[0:4])
+    year = int(date_parts[0])
     if year < 1900:
-        year = 1900 + int(date[2:4])
+        year = 1900 + (year % 100)
         confidence_level -= 10
     elif year > 2100:
-        year = 2000 + int(date[2:4])
+        year = 2000 + (year % 100)
         confidence_level -= 10
 
-    month = int(date[4:6])
+    month = int(date_parts[1])
     if 12 < month < 20:
         month = 10
         confidence_level -= 10
     elif month > 21:
-        month = int(date[5:6])
+        month = (month % 10)
         confidence_level -= 10
 
-    day = int(date[6:])
+    day = int(date_parts[2])
     date = str(year) + "." + str(month).zfill(2) + "." + str(day).zfill(2)
     return ConfidenceValue(value=date, confidence=confidence_level)
 
@@ -194,6 +203,21 @@ def __image_name(read_values):
         return ConfidenceValue(value=' '.join(name_parts).title(), confidence=min(confidence_levels)), False
 
 
+def roman_to_int(s):
+    rom_val = {'|':1, 'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+    int_val = 0
+    for i in range(len(s)):
+        if i > 0 and s[i] in rom_val and rom_val[s[i]] > rom_val[s[i - 1]]:
+            int_val += rom_val[s[i]] - 2 * rom_val[s[i - 1]]
+        else:
+            int_val += rom_val[s[i]]
+    return int_val
+
+
+def __roman_match(strg, search=re.compile(r'[^|IVXLCDM]').search):
+    return not bool(search(strg))
+
+
 def __image_city(read_values):
     name = ""
     confidence_levels = []
@@ -210,7 +234,7 @@ def __image_city(read_values):
         return ConfidenceValue(value="", confidence=0)
 
     #Fix city
-    city = name.upper().rstrip().lstrip()
+    city = name.upper().rstrip().lstrip()#
 
     city_parts = city.split(' ')
     for part in city_parts.copy()[::-1]:
@@ -220,25 +244,25 @@ def __image_city(read_values):
 
     best_candidate = ''
     numbers_found = ''
+    confidence_level = 100
 
-    for part in city_parts:
+    for part in city_parts[::-1]:
         if part in cities:
             best_candidate = part
+            confidence_level = confidence_levels[city_parts.index(best_candidate)]
             break
         elif len(part) >= 2 and part[0:2].isdigit() and 0 < int(part[0:2]) <= 23:
             numbers_found = part[0:2]
-        elif len(part) > len(best_candidate):
-            best_candidate = part
+        elif __roman_match(part):
+            numbers_found = str(roman_to_int(part))
+            if len(numbers_found) > 2:
+                numbers_found = ""
+        else:
+            confidence_level = min(confidence_level, int(confidence_levels[city_parts.index(part)]))
+            best_candidate = part + " " + best_candidate
 
-    confidence_level = confidence_levels[city_parts.index(best_candidate)]
-    if best_candidate.title() == "Budapest":
-        index = city_parts.index(best_candidate)
-        if len(city_parts) > index + 1:
-            numbers = city_parts[index + 1]
-            if 0 < len(numbers) <= 2 and numbers.isdigit():
-                best_candidate = best_candidate + ' ' + numbers
-    elif best_candidate not in cities and len(numbers_found) == 2:
-        best_candidate = 'Budapest ' + numbers_found
+    if len(numbers_found) != 0:
+        best_candidate = best_candidate + " " + numbers_found
 
     return ConfidenceValue(value=best_candidate.title(), confidence=confidence_level)
 
@@ -296,15 +320,15 @@ def __fix_city(city):
 
     city_parts = city.split(' ')
     for part in city_parts.copy():
-        if len(part) == 0 or '-' in part:
+        if len(part) <= 1:
             city_parts.remove(part)
 
     best_candidate = ''
     for part in city_parts:
         if part in cities:
             return part.title()
-        elif len(part) > len(best_candidate):
-            best_candidate = part
+        else:
+            best_candidate = best_candidate + " " + part
 
     return best_candidate.title()
 
@@ -341,9 +365,9 @@ field_coordinates = [
     [ #OLD_CARD
         [[285, 450], [770, 550]], #barcode
         [[140, 140], [720, 220]], #name
-        [[385, 270], [710, 325]], #birthplace
+        [[385, 270], [710, 345]], #birthplace
         [[210, 320], [745, 370]], #mother_name_primary
-        [[65, 355], [775, 400]], #mother_name_secondary
+        [[65, 355], [775, 405]], #mother_name_secondary
         [[565, 365], [770, 435]], #release data
     ],
     [ #NEW_CARD
@@ -358,7 +382,14 @@ field_coordinates = [
 ]
 
 
-def __get_image_part(img, coordinates):
+def __get_image_part(img, card_type, card_index, override_coordinates = None):
+    if override_coordinates is not None and len(override_coordinates) > card_type and len(override_coordinates[card_type]) > card_index and override_coordinates[card_type][card_index][0][0] != 0:
+        return __get_image_part_by_coordinate(img, override_coordinates[card_type][card_index])
+    else:
+        return __get_image_part_by_coordinate(img, field_coordinates[card_type][card_index])
+
+
+def __get_image_part_by_coordinate(img, coordinates):
     return img[coordinates[0][1]:coordinates[1][1], coordinates[0][0]:coordinates[1][0]]
 
 
@@ -555,22 +586,34 @@ def __add_to_list(dict, key, value):
         dict[key].append(value)
 
 
-def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu, use_blur, cluster_image_num):
+def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu, use_blur, cluster_image_num, override_coordinates):
 
     name = birthplace = mother_name_1 = mother_name_2 = release_date = serial_number = None
 
     if runlevel == 0:
         if card_type == CardType.OLD_CARD:
             image_parts = []
+            if override_coordinates is None or override_coordinates[card_type][3][0][0] != 0:
+                run_mother_1 = True
+            else:
+                run_mother_1 = False
+
+            if override_coordinates is None or override_coordinates[card_type][4][0][0] != 0:
+                run_mother_2 = True
+            else:
+                run_mother_2 = False
+
             if "name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
+                image_parts.append(__get_image_part(img, card_type,1, override_coordinates))
             if "birthplace" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
+                image_parts.append(__get_image_part(img, card_type,2, override_coordinates))
             if "mother_name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                if run_mother_1:
+                    image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
+                if run_mother_2:
+                    image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
             if "release_date" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
@@ -586,24 +629,26 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
                 birthplace = __image_city(tesseract_output[i])
                 i += 1
             if "mother_name" in unchecked_fields:
-                mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
-                i += 1
-                mother_name_2, found_mother_2 = __image_name(tesseract_output[i])
-                i += 1
+                if run_mother_1:
+                    mother_name_1, found_mother_1 = __image_name(tesseract_output[i])
+                    i += 1
+                if run_mother_2:
+                    mother_name_2, found_mother_2 = __image_name(tesseract_output[i])
+                    i += 1
             if "release_date" in unchecked_fields:
                 release_date = __image_digits(tesseract_output[i])
             serial_number = None
         else:
             image_parts = []
             if "name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
+                image_parts.append(__get_image_part(img, card_type, 2, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
             if "birthplace" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
             if "mother_name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
             if "release_date" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][6]))
+                image_parts.append(__get_image_part(img, card_type, 6, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"],
@@ -625,16 +670,16 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
             if "release_date" in unchecked_fields:
                 release_date = __image_digits(tesseract_output[i])
             if "serial_number" in unchecked_fields:
-                serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
+                serial_number = __get_datamatrix_data(__get_image_part(img, card_type, 1, override_coordinates))
 
     else:
         if card_type == CardType.OLD_CARD:
             image_parts = []
             if "name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
+                image_parts.append(__get_image_part(img, card_type, 1, override_coordinates))
             if "mother_name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
@@ -652,13 +697,13 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if "birthplace" in unchecked_fields:
                 tesseract_output = __run_tesseract_multiple_images(
-                    [__get_image_part(img, field_coordinates[card_type][2])
+                    [__get_image_part(img, card_type, 2, override_coordinates)
                      ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" in unchecked_fields:
                 tesseract_output = __run_tesseract_multiple_images(
-                    [__get_image_part(img, field_coordinates[card_type][5])
+                    [__get_image_part(img, card_type, 5, override_coordinates)
                      ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
                 release_date = __image_digits(tesseract_output[0])
 
@@ -666,10 +711,10 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
         else:
             image_parts = []
             if "name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
+                image_parts.append(__get_image_part(img, card_type, 2, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
             if "mother_name" in unchecked_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"],
@@ -687,18 +732,18 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
 
             if "birthplace" in unchecked_fields:
                 tesseract_output = __run_tesseract_multiple_images(
-                    [__get_image_part(img, field_coordinates[card_type][4])
+                    [__get_image_part(img, card_type, 4, override_coordinates)
                      ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" in unchecked_fields:
                 tesseract_output = __run_tesseract_multiple_images(
-                    [__get_image_part(img, field_coordinates[card_type][6])
+                    [__get_image_part(img, card_type, 6, override_coordinates)
                      ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu)
                 release_date = __image_digits(tesseract_output[0])
 
             if "serial_number" in unchecked_fields:
-                serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
+                serial_number = __get_datamatrix_data(__get_image_part(img, card_type, 1, override_coordinates))
 
     if 'serial_number' in unchecked_fields:
         if serial_number != validating_fields['serial_number']:
@@ -738,6 +783,95 @@ def __run_image_field_check(img, card_type, runlevel, unchecked_fields, validati
             __add_to_list(found_fields, 'release_date', release_date)
 
 
+text_coordinates = [
+    [[0, 0]],
+    [[215, 180], [215, 150], [150, 150], [150, 180], [230, 150], [230, 180]],
+    [[430, 315], [430, 290], [460, 315], [460, 290]],
+    [[240, 355], [300, 355], [350, 355]],
+    [[100, 380], [130, 380], [100, 360], [130, 360]],
+    [[600, 410], [640, 410], [600, 390], [640, 390]]
+]
+
+
+def __text_detect(image):
+    ele_size = (25, 3)
+    image_original = cv2.GaussianBlur(image, (3, 3), sigmaX=0.7)
+    image = image_original[40:580, 40:850, :]
+    Z = image.reshape((-1, 3))
+    Z = np.float32(Z)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    K = 5
+    ret, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+    center = np.uint8(center)
+    minIndex = 0
+    for j in range(1, K):
+        if (sum(center[j]) < sum(center[minIndex])):
+            minIndex = j
+
+    for j in range(0, K):
+        if minIndex == j:
+            center[j][:] = 0
+        else:
+            center[j][:] = 255
+
+    res = center[label.flatten()]
+    image = res.reshape((image.shape))
+
+    if len(image.shape)==3:
+        image = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    image = cv2.copyMakeBorder(image, 40, 0, 40, 0, cv2.BORDER_CONSTANT, value=255)
+    img = cv2.Sobel(image,cv2.CV_8U,1,0)#same as default,None,3,1,0,cv2.BORDER_DEFAULT)
+    img_threshold = cv2.threshold(img,0,255,cv2.THRESH_OTSU+cv2.THRESH_BINARY)
+    element = cv2.getStructuringElement(cv2.MORPH_RECT,ele_size)
+    img = cv2.morphologyEx(img_threshold[1],cv2.MORPH_CLOSE,element)
+    #img_threshold = cv2.bitwise_not(img_threshold)
+    contours = cv2.findContours(img,0,1)
+    Rect_all = [cv2.boundingRect(i) for i in contours[1] if i.shape[0] > 40]
+    Rect = [x for x in Rect_all if x[2] >= 40 and 20 <= x[3] <= 90]
+    RectP = [(int(i[0]-i[2]*0.05),int(i[1]-i[3]*0.15),int(i[0]+i[2]*1.15),int(i[1]+i[3]*1.15)) for i in Rect]
+
+    text_rects = [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)]
+    for i in range(1, len(text_coordinates)):
+        for j in range(len(text_coordinates[i])):
+            found = False
+            for rect in RectP:
+                if rect[0] > text_coordinates[i][j][0] - 80 and rect[0] <= text_coordinates[i][j][0] <= rect[2] and \
+                        rect[1] <= text_coordinates[i][j][1] <= rect[3]:
+                    found = True
+                    text_rects[i] = rect
+                    break
+            if found:
+                break
+
+    while True:
+        changed = False
+        for i in range(1, len(text_rects)):
+            text_rect = text_rects[i]
+            for rect in RectP:
+                if rect[0] > text_rect[0] and rect[2] > text_rect[2] and rect[0] < text_rect[0] + 30 and (
+                        (text_rect[1] - 5) <= rect[1] <= (text_rect[1]) + 5 or (text_rect[3]) - 5 <= rect[3] <= (
+                        text_rect[3] + 5)):
+                    text_rects[i] = (text_rect[0], min(rect[1], text_rect[1]), max(text_rect[2], rect[2]), max(text_rect[3], rect[3]))
+                    changed = True
+
+        if not changed:
+            break
+
+    #rect_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    #for i in RectP:
+    #    cv2.rectangle(rect_image,i[:2],i[2:],(0,0,255))
+    #for i in text_rects:
+    #    cv2.rectangle(rect_image,i[:2],i[2:],(0,255,0))
+    #for i in range(len(text_coordinates)):
+    #    for j in range(len(text_coordinates[i])):
+    #        cv2.circle(rect_image, (text_coordinates[i][j][0], text_coordinates[i][j][1]), 3, (255, 0, 0))
+    #cv2.imshow("test", rect_image)
+    #cv2.waitKey(0)
+
+    for i in range(len(text_rects)):
+        text_rects[i] = [[text_rects[i][0], text_rects[i][1]], [text_rects[i][2], text_rects[i][3]]]
+    return [text_rects], image
+
 def validate_id_card(img, runlevel, validating_fields):
     validating_fields = dict(validating_fields)
     unchecked_fields = set()
@@ -767,10 +901,10 @@ def validate_id_card(img, runlevel, validating_fields):
             if type(img) is str:
                 return __get_barcode_response(original_img)
 
-    #print("Warp time: " + str((time.time() - start_time)))
-
+    app.logger.log(logging.INFO, "Warp time: {:.3f}".format(time.time() - start_time))
     # Barcode detection
-    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+    start = time.time()
+    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0))
     if barcode_id_num is None:
         if card_type == CardType.OLD_CARD:
             if alternate_card_used:
@@ -781,7 +915,7 @@ def validate_id_card(img, runlevel, validating_fields):
                 else:
                     #cv2.imshow("Test", img)
                     #cv2.waitKey(0)
-                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0))
                     if barcode_id_num is None:
                         return __get_barcode_response(original_img)
             else:
@@ -795,12 +929,12 @@ def validate_id_card(img, runlevel, validating_fields):
                     else:
                         # cv2.imshow("Test", img)
                         # cv2.waitKey(0)
-                        barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                        barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0))
                         if barcode_id_num is None:
                             return __get_barcode_response(original_img)
                     return __get_barcode_response(original_img)
                 else:
-                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0))
                     if barcode_id_num is None:
                         img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,
                                                             0)
@@ -810,14 +944,22 @@ def validate_id_card(img, runlevel, validating_fields):
                         else:
                             # cv2.imshow("Test", img)
                             # cv2.waitKey(0)
-                            barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                            barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0))
                             if barcode_id_num is None:
                                 return __get_barcode_response(original_img)
         else:
             return __get_barcode_response(original_img)
 
+    app.logger.log(logging.INFO, "Barcode time: {:.3f}".format(time.time() - start))
+
     real_id_num = barcode_id_num
-    #print("Barcode time: " + str((time.time() - start_time)))
+    if (card_type == CardType.OLD_CARD):
+        start = time.time()
+        override_coordinates, clustered_image = __text_detect(img)
+        app.logger.log(logging.INFO, "Text position detection time: {:.3f}".format(time.time() - start))
+    else:
+        override_coordinates, clustered_image = None, None
+
 
     real_birthday = ConfidenceValue(value=__birth_date_from_id(real_id_num).strftime('%Y.%m.%d'),
                                     confidence=random.randint(90, 100))
@@ -831,55 +973,67 @@ def validate_id_card(img, runlevel, validating_fields):
             validating_fields['birthdate'] = validating_fields['birthdate'][0:-1]
 
     found_fields = {}
+    start = time.time()
+    if clustered_image is not None and len(unchecked_fields) != 0:
+        __run_image_field_check(clustered_image, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                run_otsu=False, use_blur=False, cluster_image_num=0,
+                                override_coordinates=override_coordinates)
     if len(unchecked_fields) != 0:  #79
         __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                run_otsu=False, use_blur=True, cluster_image_num=5)
+                                run_otsu=False, use_blur=True, cluster_image_num=5, override_coordinates=override_coordinates)
     if len(unchecked_fields) != 0: #79
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True, cluster_image_num=0)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=True, cluster_image_num=0, override_coordinates=override_coordinates)
     if len(unchecked_fields) != 0: #77
-        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=0)
+        __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=True, cluster_image_num=0, override_coordinates=override_coordinates)
     if len(unchecked_fields) <= 3:
         if len(unchecked_fields) != 0: #75
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0)
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=True, use_blur=False, cluster_image_num=0, override_coordinates=override_coordinates)
         if len(unchecked_fields) != 0:  #71
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=False, cluster_image_num=5)
+                                    run_otsu=False, use_blur=False, cluster_image_num=5, override_coordinates=override_coordinates)
     if len(unchecked_fields) <= 2:
         if len(unchecked_fields) != 0: #66
-            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6)
+            __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields, run_otsu=False, use_blur=False, cluster_image_num=6, override_coordinates=override_coordinates)
         if len(unchecked_fields) != 0:  # 65
             __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                    run_otsu=False, use_blur=False, cluster_image_num=0)
-        if card_type == CardType.OLD_CARD and alternate_card_used == False:
+                                    run_otsu=False, use_blur=False, cluster_image_num=0, override_coordinates=override_coordinates)
+        if card_type == CardType.OLD_CARD and alternate_card_used == False and len(unchecked_fields) != 0:
             img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
             if type(img) is not str:
+                override_coordinates, clustered_image = __text_detect(img)
+                if clustered_image is not None and len(unchecked_fields) != 0:
+                    __run_image_field_check(clustered_image, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
+                                            run_otsu=False, use_blur=False, cluster_image_num=0,
+                                            override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #63
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=False, use_blur=True, cluster_image_num=5)
+                                            run_otsu=False, use_blur=True, cluster_image_num=5, override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #58
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=False, use_blur=False, cluster_image_num=5)
+                                            run_otsu=False, use_blur=False, cluster_image_num=5, override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #58
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=True, use_blur=True, cluster_image_num=0)
+                                            run_otsu=True, use_blur=True, cluster_image_num=0, override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #56
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=False, use_blur=True, cluster_image_num=0)
+                                            run_otsu=False, use_blur=True, cluster_image_num=0, override_coordinates=override_coordinates)
 
                 if len(unchecked_fields) != 0: #54
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=False, use_blur=False, cluster_image_num=6)
+                                            run_otsu=False, use_blur=False, cluster_image_num=6, override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #51
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                            run_otsu=True, use_blur=False, cluster_image_num=0)
+                                            run_otsu=True, use_blur=False, cluster_image_num=0, override_coordinates=override_coordinates)
                 if len(unchecked_fields) != 0: #48
                     __run_image_field_check(img, card_type, runlevel, unchecked_fields, validating_fields, found_fields,
-                                        run_otsu=False, use_blur=False, cluster_image_num=0)
+                                        run_otsu=False, use_blur=False, cluster_image_num=0, override_coordinates=override_coordinates)
 
+    app.logger.log(logging.INFO, "Text read complete time: {:.3f}".format(time.time() - start))
 
     valid_failed = False
     valid_success = True
 
+    start = time.time()
     response = {}
     if 'id_number' in validating_fields:
         if real_id_num == validating_fields['id_number']:
@@ -904,7 +1058,7 @@ def validate_id_card(img, runlevel, validating_fields):
     for key in validating_fields:
         if key not in unchecked_fields:
             response[key] = CheckResponseField(validation_result=ConfidenceValue(True, 100))
-        elif found_fields[key] is not None:
+        elif key in found_fields and found_fields[key] is not None:
             maxValue = -1
             maxField = ""
 
@@ -928,6 +1082,9 @@ def validate_id_card(img, runlevel, validating_fields):
 
     response['validation_success'] = valid_success
     response['validation_failed'] = valid_failed
+    app.logger.log(logging.INFO, "Post processing time: {:.3f}".format(time.time() - start))
+    app.logger.log(logging.INFO, "Complete processing time: {:.3f}".format(time.time() - start_time))
+
     return response
 
 
@@ -1170,7 +1327,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                 return __get_barcode_response(original_img)
 
     # Barcode detection
-    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0, override_coordinates))
     if barcode_id_num is None:
         if card_type == CardType.OLD_CARD:
             if alternate_card_used:
@@ -1181,7 +1338,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                 else:
                     #cv2.imshow("Test", img)
                     #cv2.waitKey(0)
-                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0, override_coordinates))
                     if barcode_id_num is None:
                         return __get_barcode_response(original_img)
             else:
@@ -1195,12 +1352,12 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                     else:
                         #cv2.imshow("Test", img)
                         #cv2.waitKey(0)
-                        barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                        barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0, override_coordinates))
                         if barcode_id_num is None:
                             return __get_barcode_response(original_img)
                     return __get_barcode_response(original_img)
                 else:
-                    barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                    barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0, override_coordinates))
                     if barcode_id_num is None:
                         img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,
                                                             runlevel)
@@ -1210,7 +1367,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                         else:
                             # cv2.imshow("Test", img)
                             # cv2.waitKey(0)
-                            barcode_id_num = __get_barcode_data(__get_image_part(img, field_coordinates[card_type][0]))
+                            barcode_id_num = __get_barcode_data(__get_image_part(img, card_type, 0, override_coordinates))
                             if barcode_id_num is None:
                                 return __get_barcode_response(original_img)
         else:
@@ -1231,7 +1388,7 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
     #cv2.waitKey(0)
     ##cv2.imwrite("test_output/test.jpg", imgCopy)
     #for i in range(1, 7):
-    #    cv2.imwrite("test_output/test" + str(i) + ".jpg", __get_image_part(img, field_coordinates[card_type][i]))
+    #    cv2.imwrite("test_output/test" + str(i) + ".jpg", __get_image_part(img, card_type, i, override_coordinates))
 
     name = birthplace = mother_name_1 = mother_name_2 = release_date = serial_number = None
     found_name = found_mother_1 = found_mother_2 = False
@@ -1240,14 +1397,14 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
         if card_type == CardType.OLD_CARD:
             image_parts = []
             if "name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
+                image_parts.append(__get_image_part(img, card_type, 1, override_coordinates))
             if "birthplace" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
+                image_parts.append(__get_image_part(img, card_type, 2, override_coordinates))
             if "mother_name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
             if "release_date" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
@@ -1272,14 +1429,14 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
         else:
             image_parts = []
             if "name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
+                image_parts.append(__get_image_part(img, card_type, 2, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
             if "birthplace" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
             if "mother_name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
             if "release_date" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][6]))
+                image_parts.append(__get_image_part(img, card_type, 6, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_complete"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
@@ -1300,16 +1457,16 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
             if "release_date" not in filter_fields:
                 release_date = __image_digits(tesseract_output[i])
             if "serial_number" not in filter_fields:
-                serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
+                serial_number = __get_datamatrix_data(__get_image_part(img, card_type, 1, override_coordinates))
 
     else:
         if card_type == CardType.OLD_CARD:
             image_parts = []
             if "name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][1]))
+                image_parts.append(__get_image_part(img, card_type, 1, override_coordinates))
             if "mother_name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][4]))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 4, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
@@ -1325,12 +1482,12 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                 mother_name_2, found_mother_2 = __image_name(tesseract_output[i+1])
 
             if "birthplace" not in filter_fields:
-                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][2])
+                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, card_type, 2, override_coordinates)
                                                                     ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" not in filter_fields:
-                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][5])
+                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, card_type, 5, override_coordinates)
                                                                     ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 release_date = __image_digits(tesseract_output[0])
 
@@ -1338,10 +1495,10 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
         else:
             image_parts = []
             if "name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][2]))
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][3]))
+                image_parts.append(__get_image_part(img, card_type, 2, override_coordinates))
+                image_parts.append(__get_image_part(img, card_type, 3, override_coordinates))
             if "mother_name" not in filter_fields:
-                image_parts.append(__get_image_part(img, field_coordinates[card_type][5]))
+                image_parts.append(__get_image_part(img, card_type, 5, override_coordinates))
 
             if len(image_parts) != 0:
                 tesseract_output = __run_tesseract_multiple_images(image_parts, extension_configs=["bazaar_name"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
@@ -1357,17 +1514,17 @@ def read_id_card(img, runlevel, filter_fields = [], run_otsu = False, use_blur =
                 mother_name_2, found_mother_2 = None, False
 
             if "birthplace" not in filter_fields:
-                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][4])
+                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, card_type, 4, override_coordinates)
                                                                     ], extension_configs=["bazaar_city"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 birthplace = __image_city(tesseract_output[0])
 
             if "release_date" not in filter_fields:
-                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, field_coordinates[card_type][6])
+                tesseract_output = __run_tesseract_multiple_images([__get_image_part(img, card_type, 6, override_coordinates)
                                                                     ], extension_configs=["digits"], lang="hun_fast", run_otsu=run_otsu, blur_image=use_blur)
                 release_date = __image_digits(tesseract_output[0])
 
             if "serial_number" not in filter_fields:
-                serial_number = __get_datamatrix_data(__get_image_part(img, field_coordinates[card_type][1]))
+                serial_number = __get_datamatrix_data(__get_image_part(img, card_type, 1, override_coordinates))
 
 
     #print("Read time: " + str((time.time() - start_time)))

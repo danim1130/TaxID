@@ -1,4 +1,4 @@
-connexion == 1.1.15
+connexion == 1.1.14
 python_dateutil == 2.6.0
 setuptools >= 21.0.0
 Flask == 0.12.2
