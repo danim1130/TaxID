@@ -29,5 +29,5 @@ ENV OMP_THREAD_LIMIT=1
 
 EXPOSE 8080
 
-CMD python3.6 cleanup.py & gunicorn -b 0.0.0.0:8080 -w $(cat /proc/cpuinfo | grep processor | wc -l) --timeout 20 main
+CMD python3.6 cleanup.py & gunicorn -b 0.0.0.0:8080 -w $(cat /proc/cpuinfo | grep processor | wc -l) --timeout 30 main
 
