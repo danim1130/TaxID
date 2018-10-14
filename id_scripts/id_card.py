@@ -4,7 +4,7 @@ import random
 import logging
 from collections import namedtuple
 from enum import IntEnum
-from main import application as application
+
 
 import cv2
 import numpy as np
@@ -363,7 +363,7 @@ card_sizes = [
 
 field_coordinates = [
     [ #OLD_CARD
-        [[285, 450], [770, 550]], #barcode
+        [[285, 450], [780, 560]], #barcode
         [[140, 140], [720, 220]], #name
         [[385, 270], [710, 345]], #birthplace
         [[210, 320], [745, 370]], #mother_name_primary
@@ -371,7 +371,7 @@ field_coordinates = [
         [[565, 365], [770, 435]], #release data
     ],
     [ #NEW_CARD
-        [[335, 583], [616, 675]], #barcode
+        [[315, 573], [616, 675]], #barcode
         [[100, 600], [200, 700]], #datamatrix
         [[255, 210], [705, 270]], #name first#
         [[255, 260], [705, 310]], #name_second
@@ -920,7 +920,7 @@ def validate_id_card(img, runlevel, validating_fields):
                         return __get_barcode_response(original_img)
             else:
                 alternate_card_used = True
-                img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width, 0, use_alternate_card=True)
+                img = __get_transform_sift_for_type(original_img, CardType.OLD_CARD, transform_target_width, 0, use_alternate_card=True)
                 if type(img) is str:
                     img = __get_transform_sift_for_type(original_img, CardType.NEW_CARD, transform_target_width,0)
                     card_type = CardType.NEW_CARD
